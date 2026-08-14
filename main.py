@@ -23,6 +23,10 @@ class App(ctk.CTk):
 
         self.selected_paths = set()
         self.engine = DuplicateEngine()
+        
+        self.abort_event = threading.Event()
+        self.pause_event = threading.Event()
+        self.pause_event.set() # Not paused by default
 
         self._setup_ui()
 
@@ -75,9 +79,18 @@ class App(ctk.CTk):
         self.controls_frame.grid(row=1, column=0, sticky="ew", padx=10)
         
         self.scan_btn = ctk.CTkButton(self.controls_frame, text="Start Scan", command=self.start_scan)
-        self.scan_btn.pack(side="left", padx=10)
+        self.scan_btn.pack(side="left", padx=5)
+
+        self.pause_btn = ctk.CTkButton(self.controls_frame, text="Pause", command=self.toggle_pause, state="disabled")
+        self.pause_btn.pack(side="left", padx=5)
+
+        self.stop_btn = ctk.CTkButton(self.controls_frame, text="Stop", command=self.stop_scan, state="disabled", fg_color="#D32F2F", hover_color="#B71C1C")
+        self.stop_btn.pack(side="left", padx=5)
         
-        self.progress_bar = ctk.CTkProgressBar(self.controls_frame, width=300)
+        self.delete_all_btn = ctk.CTkButton(self.controls_frame, text="Delete All Selected", command=self.delete_all_selected, state="disabled", fg_color="#D32F2F", hover_color="#B71C1C")
+        self.delete_all_btn.pack(side="right", padx=5)
+        
+        self.progress_bar = ctk.CTkProgressBar(self.controls_frame, width=200)
         self.progress_bar.pack(side="left", padx=10, fill="x", expand=True)
         self.progress_bar.set(0)
         
@@ -125,15 +138,62 @@ class App(ctk.CTk):
             return
 
         self.scan_btn.configure(state="disabled")
+        self.pause_btn.configure(state="normal", text="Pause")
+        self.stop_btn.configure(state="normal")
+        self.delete_all_btn.configure(state="disabled")
+        
         for card in self.result_cards:
             card.destroy()
         self.result_cards.clear()
         
         self.engine = DuplicateEngine()
         
+        self.abort_event.clear()
+        self.pause_event.set()
+        
         thread = threading.Thread(target=self._run_scan_thread, args=(active_filters,))
         thread.daemon = True
         thread.start()
+
+    def toggle_pause(self):
+        if self.pause_event.is_set():
+            self.pause_event.clear()
+            self.pause_btn.configure(text="Resume")
+            self.status_label.configure(text="Paused...")
+        else:
+            self.pause_event.set()
+            self.pause_btn.configure(text="Pause")
+            self.status_label.configure(text="Scanning...")
+
+    def stop_scan(self):
+        self.abort_event.set()
+        self.pause_event.set() # Unpause to let thread exit
+        self.status_label.configure(text="Stopping...")
+        self.pause_btn.configure(state="disabled")
+        self.stop_btn.configure(state="disabled")
+
+    def delete_all_selected(self):
+        all_selected_paths = []
+        cards_to_remove = []
+        for card in self.result_cards:
+            selected = [path for cb, var, path in card.checkboxes if var.get() == "on"]
+            if selected:
+                all_selected_paths.extend(selected)
+                cards_to_remove.append(card)
+                
+        if not all_selected_paths:
+            messagebox.showinfo("No Files Selected", "Please select files to delete first.")
+            return
+            
+        total_size = sum(os.path.getsize(p) for p in all_selected_paths)
+        size_str = DuplicateGroupCard.format_size(total_size)
+        
+        if messagebox.askyesno("Confirm Delete All", f"Send {len(all_selected_paths)} files ({size_str}) to the Recycle Bin?"):
+            deleted = self.engine.delete_files(all_selected_paths)
+            messagebox.showinfo("Deleted", f"Successfully moved {deleted} files to the Recycle Bin.")
+            for card in cards_to_remove:
+                card.destroy()
+                self.result_cards.remove(card)
 
     def update_progress_ui(self, message, progress=None):
         self.status_label.configure(text=message)
@@ -149,19 +209,36 @@ class App(ctk.CTk):
             self.after(0, self.update_progress_ui, msg, 0) # Just indeterminate progress for now
 
         # Scan phase
-        files_by_size, image_files = scanner.scan_directories(self.selected_paths, filters, ui_callback)
+        files_by_size, image_files = scanner.scan_directories(
+            self.selected_paths, filters, ui_callback, self.abort_event, self.pause_event
+        )
         
+        if self.abort_event.is_set():
+            self.after(0, self.update_progress_ui, "Scan aborted.", 0)
+            self.after(0, lambda: self.scan_btn.configure(state="normal"))
+            return
+            
         # Exact duplicate phase
         def exact_prog(processed, total, msg):
             self.after(0, self.update_progress_ui, msg, processed / total if total else 0)
             
-        exact_dupes = self.engine.find_exact_duplicates(files_by_size, exact_prog)
+        exact_dupes = self.engine.find_exact_duplicates(
+            files_by_size, exact_prog, self.abort_event, self.pause_event
+        )
+        
+        if self.abort_event.is_set():
+            self.after(0, self.update_progress_ui, "Scan aborted.", 0)
+            self.after(0, lambda: self.scan_btn.configure(state="normal"))
+            return
         
         self.after(0, self._show_results, exact_dupes)
 
     def _show_results(self, duplicates):
         self.update_progress_ui("Scan complete.", 1)
         self.scan_btn.configure(state="normal")
+        self.pause_btn.configure(state="disabled")
+        self.stop_btn.configure(state="disabled")
+        self.delete_all_btn.configure(state="normal")
         
         if not duplicates:
             ctk.CTkLabel(self.results_scroll, text="No duplicates found!").pack(pady=20)

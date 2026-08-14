@@ -32,7 +32,7 @@ class Scanner:
                 exts.update(FILE_TYPES[f])
         return exts
 
-    def scan_directories(self, paths, filters, progress_callback=None):
+    def scan_directories(self, paths, filters, progress_callback=None, abort_event=None, pause_event=None):
         """
         Scans given paths for files matching the filters.
         Groups files by their exact size.
@@ -49,14 +49,25 @@ class Scanner:
         total_scanned = 0
 
         for root_path in paths:
+            if abort_event and abort_event.is_set():
+                break
+                
             if not os.path.exists(root_path):
                 continue
             
             for dirpath, dirnames, filenames in os.walk(root_path):
+                if abort_event and abort_event.is_set():
+                    break
+                if pause_event:
+                    pause_event.wait()
+                    
                 # Filter out excluded directories in-place to avoid descending into them
                 dirnames[:] = [d for d in dirnames if d.lower() not in self.excludes]
                 
                 for filename in filenames:
+                    if abort_event and abort_event.is_set():
+                        break
+                    
                     filepath = os.path.join(dirpath, filename)
                     ext = os.path.splitext(filename)[1].lower()
                     
