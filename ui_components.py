@@ -53,9 +53,12 @@ class DuplicateGroupCard(ctk.CTkFrame):
         ext = os.path.splitext(path)[1].lower()
         if ext in {'.jpg', '.jpeg', '.png', '.bmp', '.gif', '.webp'}:
             try:
-                img = Image.open(path)
-                img.thumbnail((40, 40))
-                ctk_img = ctk.CTkImage(light_image=img, dark_image=img, size=(40, 40))
+                with Image.open(path) as img:
+                    # Make a copy so the original file handle can be closed immediately
+                    img_copy = img.copy()
+                    img_copy.thumbnail((40, 40))
+                
+                ctk_img = ctk.CTkImage(light_image=img_copy, dark_image=img_copy, size=(40, 40))
                 self.thumbnails.append(ctk_img) # keep reference
                 img_label = ctk.CTkLabel(row, image=ctk_img, text="")
                 img_label.pack(side="left", padx=5)

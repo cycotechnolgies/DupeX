@@ -108,7 +108,9 @@ class DuplicateEngine:
         success_count = 0
         for path in filepaths:
             try:
-                send2trash.send2trash(path)
+                # Windows SHFileOperation API requires normalized backslashes
+                normalized_path = os.path.abspath(os.path.normpath(path))
+                send2trash.send2trash(normalized_path)
                 success_count += 1
             except Exception as e:
                 print(f"Error deleting {path}: {e}")
