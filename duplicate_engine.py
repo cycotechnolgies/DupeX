@@ -28,7 +28,7 @@ class DuplicateEngine:
         except Exception:
             return None
 
-    def find_exact_duplicates(self, files_by_size, progress_callback=None):
+    def find_exact_duplicates(self, files_by_size, progress_callback=None, abort_event=None, pause_event=None):
         """
         Pass 1: Find exact duplicates by hashing files of the same size.
         files_by_size: dict mapping size to list of filepaths.
@@ -37,11 +37,19 @@ class DuplicateEngine:
         processed = 0
 
         for size, paths in files_by_size.items():
+            if abort_event and abort_event.is_set():
+                break
+            
             if len(paths) < 2:
                 continue
             
             hashes = defaultdict(list)
             for path in paths:
+                if abort_event and abort_event.is_set():
+                    break
+                if pause_event:
+                    pause_event.wait()
+                    
                 file_hash = self.get_file_hash(path)
                 if file_hash:
                     hashes[file_hash].append(path)
